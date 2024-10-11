@@ -3,76 +3,70 @@ pragma solidity ^0.8.18;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./LiquidToken.sol"; // Import LiquidToken contract
 
-contract Staking is Ownable, ReentrancyGuard {
-    LiquidToken public liquidToken;
-    mapping(address => uint256) public stakedETH;
-    address[] public stakers;
+import "./LiquidToken.sol"; // Import the LiquidToken contract
+
+contract Staking is Ownable {
+    LiquidStakingToken public token;
+    mapping(address => uint256) public stakedAmount;
+    mapping(address => uint256) public stakingRewards;
     uint256 public totalStaked;
+    uint256 public rewardRate = 100; // Example reward rate (in basis points, or 1%)
+    uint256 public rewardInterval = 30 days; // Reward calculation interval
 
-    event Stake(address indexed user, uint256 amount);
-    event Redeem(address indexed user, uint256 amount);
-    event RewardDistributed(uint256 rewardAmount);
+    address[] public stakers;
 
-    constructor() {
-        liquidToken = new LiquidToken();
-        liquidToken.transferOwnership(address(this)); // Transfer minting rights to the Staking contract
+    constructor(address initialOwner) Ownable(initialOwner) {
+        token = new LiquidStakingToken(initialOwner);
     }
 
-    // Stake ETH and receive LST tokens in return
-    function stakeETH() external payable nonReentrant {
-        require(msg.value > 0, "Cannot stake 0 ETH");
+    // Function to allow users to deposit ETH and receive liquid staking tokens
+    function deposit() external payable {
+        require(msg.value > 0, "Deposit must be greater than zero");
 
-        if (stakedETH[msg.sender] == 0) {
-            stakers.push(msg.sender); // Add the staker if they are staking for the first time.
+        if (stakedAmount[msg.sender] == 0) {
+            stakers.push(msg.sender);
         }
 
-        stakedETH[msg.sender] += msg.value;
+        stakedAmount[msg.sender] += msg.value;
         totalStaked += msg.value;
 
-        liquidToken.mint(msg.sender, msg.value); // Mint 1 LST per 1 staked ETH
-
-        emit Stake(msg.sender, msg.value);
+        // Mint an equivalent amount of LST tokens to the user
+        token.mint(msg.sender, msg.value);
     }
 
-    // Distribute rewards proportionally to all stakers
-    function distributeRewards(uint256 rewardAmount) external onlyOwner {
-        require(address(this).balance >= rewardAmount + totalStaked, "Not enough ETH in contract");
-        require(rewardAmount > 0, "Reward amount must be greater than 0");
-        require(totalStaked > 0, "No staked ETH available for rewards");
+    // Function to calculate staking rewards based on a simple reward formula
+    function calculateRewards(address staker) public view returns (uint256) {
+        uint256 staked = stakedAmount[staker];
+        uint256 reward = (staked * rewardRate) / 10000;
+        return reward;
+    }
 
-        // Distribute rewards proportionally based on each staker's share of the total staked ETH.
+    // Function to distribute rewards to users
+    function distributeRewards() external onlyOwner {
         for (uint256 i = 0; i < stakers.length; i++) {
             address staker = stakers[i];
-            uint256 stakerShare = (stakedETH[staker] * rewardAmount) / totalStaked;
-            stakedETH[staker] += stakerShare;
+            uint256 reward = calculateRewards(staker);
+            stakingRewards[staker] += reward;
+            token.mint(staker, reward);
         }
-
-        emit RewardDistributed(rewardAmount);
     }
 
-    // Redeem staked ETH by burning LST tokens
-    function redeemETH(uint256 _amount) external nonReentrant {
-        require(stakedETH[msg.sender] >= _amount, "Insufficient balance");
-        stakedETH[msg.sender] -= _amount;
-        totalStaked -= _amount;
+    // Function to allow users to redeem their staked ETH by burning their LST tokens
+    function redeem(uint256 tokenAmount) external {
+        require(token.balanceOf(msg.sender) >= tokenAmount, "Insufficient token balance");
+        uint256 ethAmount = tokenAmount;
 
-        // Burn LST tokens from the user
-        liquidToken.burn(msg.sender, _amount);
+        require(stakedAmount[msg.sender] >= ethAmount, "Insufficient staked balance");
 
-        payable(msg.sender).transfer(_amount);
+        // Burn the LST tokens from the user
+        token.burn(msg.sender, tokenAmount);
 
-        emit Redeem(msg.sender, _amount);
-    }
+        // Update the user's staked balance and total staked amount
+        stakedAmount[msg.sender] -= ethAmount;
+        totalStaked -= ethAmount;
 
-    // View function to get the balance of staked ETH for an address
-    function getStakedBalance(address _user) external view returns (uint256) {
-        return stakedETH[_user];
-    }
-
-    // View function to get the total staked ETH in the contract
-    function getTotalStaked() external view returns (uint256) {
-        return totalStaked;
+        // Transfer the equivalent ETH back to the user
+        payable(msg.sender).transfer(ethAmount);
     }
 }
